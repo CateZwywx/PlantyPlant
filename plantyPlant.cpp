@@ -1,4 +1,4 @@
-﻿#define STB_IMAGE_WRITE_IMPLEMENTATION
+#define STB_IMAGE_WRITE_IMPLEMENTATION
 #define _CRT_SECURE_NO_WARNINGS
 #include "stb_image_write.h"
 #include <iostream>
@@ -9,8 +9,11 @@
 #include <fstream>
 #include <random>
 #include <cstdint>
+#include <thread>
 
-const std::string VERSION_OF_PROGRAMM = "3.2";
+const std::string VERSION_OF_PROGRAMM = "4.0";
+
+std::random_device rd;
 
 char empty;
 
@@ -95,20 +98,6 @@ public:
         red = ((int)(red) * (0xFF - a) + (int)(r)*a) / 0xFF;
         green = ((int)(green) * (0xFF - a) + (int)(g)*a) / 0xFF;
         blue = ((int)(blue) * (0xFF - a) + (int)(b)*a) / 0xFF;
-    }
-};
-
-class doubleCoor {
-public:
-    char x;
-    char y;
-    doubleCoor() {
-        x = 0;
-        y = 0;
-    }
-    doubleCoor(char x, char y) {
-        this->x = x;
-        this->y = y;
     }
 };
 
@@ -322,7 +311,7 @@ short numOfBrea(unsigned char gen) { // количество потомков а
     else if (gen < 223) {
         return 2;
     }
-    else if (gen >= 223 and gen <= 255) {
+    else{
         return 3;
     }
 }
@@ -333,19 +322,21 @@ void loadGenomFromFile(std::vector<std::vector<unsigned char>>& genom, std::stri
     std::string strFromFile;
     std::string temp;
     while (std::getline(file, strFromFile)) {
-        genom.push_back({});
-        for (int i = 0; i < strFromFile.size(); i++) {
-            if (strFromFile[i] != ' ') {
-                temp += strFromFile[i];
+        if (strFromFile.substr(0, 4) != "seed") {
+            genom.push_back({});
+            for (int i = 0; i < strFromFile.size(); i++) {
+                if (strFromFile[i] != ' ') {
+                    temp += strFromFile[i];
+                }
+                else {
+                    genom[genom.size() - 1].push_back(std::stoi(temp));
+                    temp.clear();
+                }
             }
-            else {
+            if (temp != "") {
                 genom[genom.size() - 1].push_back(std::stoi(temp));
                 temp.clear();
             }
-        }
-        if (temp != "") {
-            genom[genom.size() - 1].push_back(std::stoi(temp));
-            temp.clear();
         }
     }
 }
@@ -405,6 +396,13 @@ agent loadChromosome(std::vector<std::vector<unsigned char>>& genom, unsigned ch
 
 }
 
+int seedToRandTurn;
+
+bool useRandTurn;
+
+float lastRandTurn; // последнее направление, созданное случайно
+unsigned char countStepsAfterCalRandTurn = 0;
+
 void saveGenom(std::vector<std::vector<unsigned char>>& genom, std::string timeStart) {
     std::ofstream gen((timeStart + ".txt").c_str());
 
@@ -426,16 +424,111 @@ void saveGenom(std::vector<std::vector<unsigned char>>& genom, std::string timeS
             gen << "\n";
         }
     }
+    gen << "\nseed" << seedToRandTurn;
 }
 
-void drawPlant(std::vector<std::vector<unsigned char>>& genom, std::vector<std::vector<agent>>& agents, std::vector<std::vector<color>>& screen) {
-    float randTurn;
+int randToRandTurn() {
+    int a = 48271;
+    int lastSeedToRandTurn = seedToRandTurn;
+    seedToRandTurn = (a * lastSeedToRandTurn) % UINT16_MAX;
+    return seedToRandTurn;
+}
+
+void loadSeedToRandTurn(std::string filename) {
+    std::string lastLine;
+    std::ifstream file(filename);
+    while (std::getline(file, lastLine));
+    if (lastLine.substr(0, 4) == "seed") {
+        seedToRandTurn = std::stoi(lastLine.substr(5, lastLine.size() - 5));
+    }
+    else {
+        seedToRandTurn = rd();
+    }
+}
+
+void addRandTurn(std::vector<std::vector<agent>>& agents, std::vector<std::vector<unsigned char>>& genom, unsigned int il, unsigned int ip) {
+    if (countStepsAfterCalRandTurn == 0 or countStepsAfterCalRandTurn >= 50) {
+        lastRandTurn = randToRandTurn() % genom[agents[il][ip].chromosome][RANDOM_TURN] - genom[agents[il][ip].chromosome][RANDOM_TURN] / 2;
+        lastRandTurn /= 256;
+        countStepsAfterCalRandTurn++;
+    }
+    agents[il][ip].addAngle(lastRandTurn / 30);
+}
+
+void createBrea(std::vector<std::vector<agent>>& agents, std::vector<std::vector<unsigned char>>& genom, unsigned int il, unsigned int ip, int breaIndex) {
+    float radius;
+    color newColor;
+    int chromo;
+    int index;
+
+    if (breaIndex == 1) {
+        chromo = genom[agents[il][ip].chromosome][CHROMOSOME_BRANCHE1];
+        index = -1;
+    }
+    else if (breaIndex == 2) {
+        chromo = genom[agents[il][ip].chromosome][CHROMOSOME_BRANCHE2];
+        index = 0;
+    }
+    else {
+        chromo = genom[agents[il][ip].chromosome][CHROMOSOME_BRANCHE3];
+        index = 1;
+    }
+
+    if (chromo != genom.size()) {
+        radius = (float)(genom[chromo][SIZE]) / 30
+            * (255 - genom[chromo][SIZE_FROM_ANCESTOR]);
+        radius += agents[il][ip].radius
+            * genom[chromo][SIZE_FROM_ANCESTOR];
+        radius /= 255;
+
+        newColor = color(genom[chromo][RED], genom[chromo][GREEN], genom[chromo][BLUE]);
+        newColor.addColor(color(agents[il][ip].colory.red, agents[il][ip].colory.green, agents[il][ip].colory.blue), genom[chromo][COLOR_FROM_ANCESTOR]);
+        agents[il + 1].push_back(agent(
+            agents[il][ip].x,
+            agents[il][ip].y,
+            newColor,
+            agents[il][ip].direction + (float)(genom[agents[il][ip].chromosome][ANGLES_OF_BRANCHES1]) / 256 - 0.5,
+            radius,
+            genom[chromo][LENGHT],
+            index,
+            chromo
+        )
+        );
+    }
+}
+
+void createBreas(std::vector<std::vector<agent>>& agents, std::vector<std::vector<unsigned char>>& genom, unsigned int il, unsigned int ip) {
+    int chromo;
     color newColor;
     float radius = 0;
-    int chromo;
+    int index;
 
+    if (numOfBrea(genom[agents[il][ip].chromosome][NUMBER_OF_BRANCHES]) == 1) {
+        createBrea(agents, genom, il, ip, 2);
+    }
+    else if (numOfBrea(genom[agents[il][ip].chromosome][NUMBER_OF_BRANCHES]) == 2) {
+        createBrea(agents, genom, il, ip, 1);
+        createBrea(agents, genom, il, ip, 3);
+
+    }
+    else if (numOfBrea(genom[agents[il][ip].chromosome][NUMBER_OF_BRANCHES]) == 3) {
+        createBrea(agents, genom, il, ip, 1);
+        createBrea(agents, genom, il, ip, 2);
+        createBrea(agents, genom, il, ip, 3);
+    }
+}
+
+void changeColor(std::vector<std::vector<agent>>& agents, std::vector<std::vector<unsigned char>>& genom, unsigned int il, unsigned int ip) {
+    unsigned char r = genom[agents[il][ip].chromosome][RED_CHENGES];
+    unsigned char g = genom[agents[il][ip].chromosome][GREEN_CHENGES];
+    unsigned char b = genom[agents[il][ip].chromosome][BLUE_CHENGES];
+    agents[il][ip].colory.addColor(color(r, g, b), 255 / agents[il][ip].stepNum - (255 / agents[il][ip].stepNum / 2));
+
+}
+
+void drawPlant(std::vector<std::vector<unsigned char>>& genom, std::vector<std::vector<agent>>& agents, std::vector<std::vector<color>>& screen, int currPlantIndex, int plantCount) {
+    time_t timeAfterLastShowPercents = 0;
     for (int il = 0; il < genom[0][PLANT_SIZE] / 15 + 1; il++) {
-        std::cout << "il: " << il << " / " << genom[0][PLANT_SIZE] / 15 + 1 << '\n';
         if (il > 0) {
             agents[il - 1].clear();
         }
@@ -444,223 +537,74 @@ void drawPlant(std::vector<std::vector<unsigned char>>& genom, std::vector<std::
         }
         if (agents[il].size() > 0) {
             for (int ip = 0; ip < agents[il].size(); ip++) {
-                std::cout << "\r  ip: " << ip + 1 << " / " << agents[il].size();
+                if (time(0) - timeAfterLastShowPercents >= 1) {
+                    std::cout << "\r" << ip * 100 / agents[il].size() << "% | " << il * 100 / (genom[0][PLANT_SIZE] / 15 + 1) << "% | " << currPlantIndex * 100 / plantCount << "%";
+                }
                 for (int i = 0; i < agents[il][ip].stepNum; i++) {
                     volumetricCircle(agents[il][ip].colory, agents[il][ip].x, agents[il][ip].y, agents[il][ip].radius, screen);
+                    // we determine the coordinates after the agent's step / определяем координаты после шага агента
                     agents[il][ip].x += cosf(agents[il][ip].direction * -PI + PI / 2) * SIZE_STEP;
                     agents[il][ip].y -= sinf(agents[il][ip].direction * -PI + PI / 2) * SIZE_STEP;
 
-                    agents[il][ip].colory.addColor(color((char)(genom[agents[il][ip].chromosome][RED_CHENGES]), (char)(genom[agents[il][ip].chromosome][GREEN_CHENGES]), (char)(genom[agents[il][ip].chromosome][BLUE_CHENGES])), 255 / agents[il][ip].stepNum - (255 / agents[il][ip].stepNum / 2));
+                    if (useRandTurn) {
+                        addRandTurn(agents, genom, il, ip);
+                    }
 
-                    if (agents[il][ip].index == 1) {
-                        randTurn = (float)((unsigned char)(rand()) % genom[agents[il][ip].chromosome][RANDOM_TURN]) * -1;
-                        agents[il][ip].addAngle((float)((char)(genom[agents[il][ip].chromosome][TURN])) / -250 / agents[il][ip].stepNum);
-                    }
-                    else {
-                        randTurn = (float)((unsigned char)(rand()) % genom[agents[il][ip].chromosome][RANDOM_TURN]);
-                        agents[il][ip].addAngle((float)((char)(genom[agents[il][ip].chromosome][TURN])) / 250 / agents[il][ip].stepNum);
-                    }
-                    agents[il][ip].addAngle((randTurn - genom[agents[il][ip].chromosome][RANDOM_TURN] / 2) / agents[il][ip].stepNum / 200);
                     agents[il][ip].addAngle((0.0f - agents[il][ip].direction) * ((float)(char)(genom[agents[il][ip].chromosome][DOWN_UP]) / 127) / 70);
 
                     agents[il][ip].radius += (float)((char)(genom[agents[il][ip].chromosome][SIZE_CHENGES])) / agents[il][ip].stepNum / 10;
                 }
 
-                if (agents[il][ip].direction < -1) agents[il][ip].direction = 1.0f - (agents[il][ip].direction + 1);
-                if (agents[il][ip].direction > 1) agents[il][ip].direction = -1.0f + (agents[il][ip].direction - 1);
                 if (il < genom[0][PLANT_SIZE] / 15) {
                     agents.push_back({});
-                    if (numOfBrea(genom[agents[il][ip].chromosome][NUMBER_OF_BRANCHES]) == 1) {
-                        chromo = genom[agents[il][ip].chromosome][CHROMOSOME_BRANCHE2];
-                        if (chromo != genom.size()) {
-                            radius = (float)(genom[chromo][SIZE]) / 30
-                                * (255 - genom[chromo][SIZE_FROM_ANCESTOR]);
-                            radius += agents[il][ip].radius
-                                * genom[chromo][SIZE_FROM_ANCESTOR];
-                            radius /= 255;
-
-                            newColor = color(genom[chromo][RED], genom[chromo][GREEN], genom[chromo][BLUE]);
-                            newColor.addColor(color(agents[il][ip].colory.red, agents[il][ip].colory.green, agents[il][ip].colory.blue), genom[chromo][COLOR_FROM_ANCESTOR]);
-                            agents[il + 1].push_back(agent(
-                                agents[il][ip].x,
-                                agents[il][ip].y,
-                                newColor,
-                                agents[il][ip].direction + (float)(genom[agents[il][ip].chromosome][ANGLES_OF_BRANCHES2]) / 256 - 0.5,
-                                radius,
-                                genom[chromo][LENGHT],
-                                0,
-                                chromo
-                            )
-                            );
-                        }
-                    }
-                    else if (numOfBrea(genom[agents[il][ip].chromosome][NUMBER_OF_BRANCHES]) == 2) {
-                        chromo = genom[agents[il][ip].chromosome][CHROMOSOME_BRANCHE1];
-                        if (chromo != genom.size()) {
-                            radius = (float)(genom[chromo][SIZE]) / 30
-                                * (255 - genom[chromo][SIZE_FROM_ANCESTOR]);
-                            radius += agents[il][ip].radius
-                                * genom[chromo][SIZE_FROM_ANCESTOR];
-                            radius /= 255;
-
-                            newColor = color(genom[chromo][RED], genom[chromo][GREEN], genom[chromo][BLUE]);
-                            newColor.addColor(color(agents[il][ip].colory.red, agents[il][ip].colory.green, agents[il][ip].colory.blue), genom[chromo][COLOR_FROM_ANCESTOR]);
-                            agents[il + 1].push_back(agent(
-                                agents[il][ip].x,
-                                agents[il][ip].y,
-                                newColor,
-                                agents[il][ip].direction + (float)(genom[agents[il][ip].chromosome][ANGLES_OF_BRANCHES1]) / 256 - 0.5,
-                                radius,
-                                genom[chromo][LENGHT],
-                                -1,
-                                chromo
-                            )
-                            );
-                        }
-
-                        chromo = genom[agents[il][ip].chromosome][CHROMOSOME_BRANCHE3];
-                        if (chromo != genom.size()) {
-                            radius = (float)(genom[chromo][SIZE]) / 30
-                                * (255 - genom[chromo][SIZE_FROM_ANCESTOR]);
-                            radius += agents[il][ip].radius
-                                * genom[chromo][SIZE_FROM_ANCESTOR];
-                            radius /= 255;
-
-                            newColor = color(genom[chromo][RED], genom[chromo][GREEN], genom[chromo][BLUE]);
-                            newColor.addColor(color(agents[il][ip].colory.red, agents[il][ip].colory.green, agents[il][ip].colory.blue), genom[chromo][COLOR_FROM_ANCESTOR]);
-                            agents[il + 1].push_back(agent(
-                                agents[il][ip].x,
-                                agents[il][ip].y,
-                                newColor,
-                                agents[il][ip].direction + (float)(genom[agents[il][ip].chromosome][ANGLES_OF_BRANCHES3]) / 256 - 0.5,
-                                radius,
-                                genom[chromo][LENGHT],
-                                1,
-                                chromo
-                            )
-                            );
-                        }
-
-                    }
-                    else if (numOfBrea(genom[agents[il][ip].chromosome][NUMBER_OF_BRANCHES]) == 3) {
-                        chromo = genom[agents[il][ip].chromosome][CHROMOSOME_BRANCHE2];
-                        if (chromo != genom.size()) {
-                            radius = (float)(genom[chromo][SIZE]) / 30
-                                * (255 - genom[chromo][SIZE_FROM_ANCESTOR]);
-                            radius += agents[il][ip].radius
-                                * genom[chromo][SIZE_FROM_ANCESTOR];
-                            radius /= 255;
-
-                            newColor = color(genom[chromo][RED], genom[chromo][GREEN], genom[chromo][BLUE]);
-                            newColor.addColor(color(agents[il][ip].colory.red, agents[il][ip].colory.green, agents[il][ip].colory.blue), genom[chromo][COLOR_FROM_ANCESTOR]);
-                            agents[il + 1].push_back(agent(
-                                agents[il][ip].x,
-                                agents[il][ip].y,
-                                newColor,
-                                agents[il][ip].direction + (float)(genom[agents[il][ip].chromosome][ANGLES_OF_BRANCHES2]) / 256 - 0.5,
-                                radius,
-                                genom[chromo][LENGHT],
-                                0,
-                                chromo
-                            )
-                            );
-                        }
-
-                        chromo = genom[agents[il][ip].chromosome][CHROMOSOME_BRANCHE1];
-                        if (chromo != genom.size()) {
-                            radius = (float)(genom[chromo][SIZE]) / 30
-                                * (255 - genom[chromo][SIZE_FROM_ANCESTOR]);
-                            radius += agents[il][ip].radius
-                                * genom[chromo][SIZE_FROM_ANCESTOR];
-                            radius /= 255;
-
-                            newColor = color(genom[chromo][RED], genom[chromo][GREEN], genom[chromo][BLUE]);
-                            newColor.addColor(color(agents[il][ip].colory.red, agents[il][ip].colory.green, agents[il][ip].colory.blue), genom[chromo][COLOR_FROM_ANCESTOR]);
-                            agents[il + 1].push_back(agent(
-                                agents[il][ip].x,
-                                agents[il][ip].y,
-                                newColor,
-                                agents[il][ip].direction + (float)(genom[agents[il][ip].chromosome][ANGLES_OF_BRANCHES1]) / 256 - 0.5,
-                                radius,
-                                genom[chromo][LENGHT],
-                                -1,
-                                chromo
-                            )
-                            );
-                        }
-
-                        chromo = genom[agents[il][ip].chromosome][CHROMOSOME_BRANCHE3];
-                        if (chromo != genom.size()) {
-                            radius = (float)(genom[chromo][SIZE]) / 30
-                                * (255 - genom[chromo][SIZE_FROM_ANCESTOR]);
-                            radius += agents[il][ip].radius
-                                * genom[chromo][SIZE_FROM_ANCESTOR];
-                            radius /= 255;
-
-                            newColor = color(genom[chromo][RED], genom[chromo][GREEN], genom[chromo][BLUE]);
-                            newColor.addColor(color(agents[il][ip].colory.red, agents[il][ip].colory.green, agents[il][ip].colory.blue), genom[chromo][COLOR_FROM_ANCESTOR]);
-                            agents[il + 1].push_back(agent(
-                                agents[il][ip].x,
-                                agents[il][ip].y,
-                                newColor,
-                                agents[il][ip].direction + (float)(genom[agents[il][ip].chromosome][ANGLES_OF_BRANCHES3]) / 256 - 0.5,
-                                radius,
-                                genom[chromo][LENGHT],
-                                1,
-                                chromo
-                            )
-                            );
-                        }
-                    }
+                    createBreas(agents, genom, il, ip);
                 }
-
-
-
             }
         }
         else {
-            std::cout << "  empty layer\n";
         }
-        std::cout << "\n";
     }
 
     agents.clear();
 }
 
-void start(bool& chromosomeEdit, int& mode, std::string& genName1, std::string& genName2, int& randy, std::vector<std::vector<unsigned char>>& genom, std::vector<std::vector<unsigned char>>& genom1, std::vector<std::vector<unsigned char>>& genom2, bool& quality) {
-    std::cout << "1 - случайный геном\n";
-    std::cout << "2 - скрещевание\n";
-    std::cout << "3 - подгрузить\n";
-    std::cout << "4 - сравнение геномов\n";
+void start(bool& chromosomeEdit, int& mode, std::string& genName1, std::string& genName2, int& randy, bool& quality, int& fluctuation) {
+    std::cout << "1 - создание растений с случайным геномом\n";
+    std::cout << "2 - скрещевание двух растений\n";
+    std::cout << "3 - создать растение по существующему геному\n";
+    std::cout << "4 - сравнение геномов двух растений\n";
     std::string support;
     std::cin >> mode;
 
     if (mode == 2) {
+        std::cout << "Введите названия файла с геномом первого растений\n";
         std::cin >> genName1;
+        std::cout << "Введите названия файла с геномом второго растений\n";
         std::cin >> genName2;
-        loadGenomFromFile(genom1, genName1);
-        loadGenomFromFile(genom2, genName2);
-        crossingPlants(genom, genom1, genom2);
     }
     else if (mode == 3) {
+        std::cout << "Введите названия файла с геномом растений\n";
         std::cin >> genName1;
     }
 
     if (mode == 2 or mode == 3) {
-        std::cout << "Сколько байт поменять\n";
+        std::cout << "Сколько байт поменять на случайные?\n";
         std::cin >> randy;
+        std::cout << "Сколько байт немного изменить?\n";
+        std::cin >> fluctuation;
         std::cout << "Включить функцию добавление и убирания случайных хромосом? y/n\n";
         std::cin >> support;
         chromosomeEdit = support[0] == 'y' or support[0] == 'Y';
     }
 
     if (mode != 4) {
-        std::cout << "Использовать ли jpg файлы? Это незначительно ухудшит качество, но значительно уменьшает размер файла\n";
+        std::cout << "Использовать ли jpg файлы? Это незначительно ухудшит качество, но значительно уменьшает размер файла y/n\n";
         std::cin >> support;
         quality = !(support[0] == 'y' or support[0] == 'Y');
+        std::cout << "Включить ли случайные искрывления веток? y/n\n";
+        std::cin >> support;
+        useRandTurn = support[0] == 'y' or support[0] == 'Y';
     }
-
-
 }
 
 int main()
@@ -694,10 +638,10 @@ int main()
     long numOfgens = 0;
     long identicalGens = 0;
     bool chromosomeEdit;
-    std::string support;
     bool quality;
+    int fluctuation;
 
-    start(chromosomeEdit, mode, genName1, genName2, randy, genom, genom1, genom2, quality);
+    start(chromosomeEdit, mode, genName1, genName2, randy, quality, fluctuation);
 
     if (mode == 4) {
         while (true) {
@@ -729,31 +673,37 @@ int main()
                 std::cout << "\n";
             }
             std::cout << "\n" << (double)(identicalGens) * 100 / (double)(numOfgens) << "% cовпадает \n";
-
-
         }
     }
     else {
         std::cout << "введите количество растений\n";
         std::cin >> iter;
+        std::cout << "Процент просчитаных веток на этом слое | просчитаных слоёв | просчитаных растений\n";
         for (int i = 0; i < iter; i++) {
             genom.clear();
             if (mode == 1) {
                 genom = std::vector<std::vector<unsigned char>>(rand() % 18 + 3, std::vector<unsigned char>(CHROMOSOME_SIZE));
                 genomRand(genom);
+                seedToRandTurn = rd();
             }
             else if (mode == 2) {
                 loadGenomFromFile(genom1, genName1);
                 loadGenomFromFile(genom2, genName2);
                 crossingPlants(genom, genom1, genom2);
+                seedToRandTurn = rd();
             }
             else if (mode == 3) {
                 loadGenomFromFile(genom, genName1);
+                loadSeedToRandTurn(genName1);
             }
 
             if (mode == 2 or mode == 3) {
                 for (int i = 0; i < randy; i++) {
                     genom[rand() % genom.size()][rand() % CHROMOSOME_SIZE] = rand() % 256;
+                }
+                std::cout << "fluc\n";
+                for (int i = 0; i < fluctuation; i++) {
+                    genom[rand() % genom.size()][rand() % CHROMOSOME_SIZE] += rand() % 21 - 11;
                 }
                 if (chromosomeEdit) {
                     if (rand() % 5 == 0) {
@@ -794,7 +744,7 @@ int main()
             int randp;
             saveGenom(genom, id);
 
-            drawPlant(genom, agents, screen);
+            drawPlant(genom, agents, screen, i, iter);
 
             if (quality) {
                 creatPNG(id, screen);
