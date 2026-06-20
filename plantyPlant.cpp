@@ -701,7 +701,6 @@ int main()
                 for (int i = 0; i < randy; i++) {
                     genom[rand() % genom.size()][rand() % CHROMOSOME_SIZE] = rand() % 256;
                 }
-                std::cout << "fluc\n";
                 for (int i = 0; i < fluctuation; i++) {
                     genom[rand() % genom.size()][rand() % CHROMOSOME_SIZE] += rand() % 21 - 11;
                 }
